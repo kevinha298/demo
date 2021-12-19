@@ -293,8 +293,142 @@ services:
       - POSTGRES_PASSWORD=changeme
 
 
+docker-compose up
+
+
+--Dockerfile:
+FROM python:3.9-alpine3.13
+LABEL maintainer="kevinha298"
+
+ENV PYTHONUNBUFFERED 1
+
+COPY ./requirements.txt /requirements.txt
+COPY ./app /app
+
+WORKDIR /app
+EXPOSE 8000
+
+RUN python -m venv /py && \
+    /py/bin/pip install --upgrade pip && \
+    apk add --update --no-cache postgresql-client && \
+    apk add --update --no-cache --virtual .tmp-deps \
+        build-base postgresql-dev musl-dev && \
+    /py/bin/pip install -r /requirements.txt && \
+    apk del .tmp-deps && \
+    adduser --disabled-password --no-create-home app && \
+    mkdir -p /vol/web/static && \
+    mkdir -p /vol/web/media && \
+    chown -R app:app /vol && \
+    chmod -R 755 /vol
+
+ENV PATH="/py/bin:$PATH"
+
+USER app
+
+
+--docker-compose:
+version: '3.9'
+
+services:
+  app:
+    build:
+      context: .
+    command: >
+      sh -c "python manage.py wait_for_db &&
+             python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+    ports:
+      - 8000:8000
+    volumes:
+      - ./app:/app
+      - ./data/web:/vol/web
+    environment:
+      - SECRET_KEY=devsecretkey
+      - DEBUG=1
+      - DB_HOST=db
+      - DB_NAME=devdb
+      - DB_USER=devuser
+      - DB_PASS=changeme
+    depends_on:
+      - db
+
+  db:
+    image: postgres:13-alpine
+    environment:
+      - POSTGRES_DB=devdb
+      - POSTGRES_USER=devuser
+      - POSTGRES_PASSWORD=changeme
+
+
+
+--//Demo/app/app/settings.py:
+--Replace the line of "STATIC_URL = '/static/'" with the following lines:
+
+# STATIC_URL = '/static/'
+STATIC_URL = '/static/static/'
+MEDIA_URL = '/static/media/'
+
+MEDIA_ROOT = '/vol/web/media'
+STATIC_ROOT = '/vol/web/static'
+
+
+--//Demo/app/app/urls.py:
+from django.contrib import admin
+from django.urls import path
+from django.conf.urls.static import static
+from django.conf import settings
+from django.conf.urls import url 
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from core.core import MemberList, MemberDetail
+
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    url(r'^core/member/$', MemberList.as_view(), name='member'),
+    url(r'^core/member/(?P<mrn>\d+)/$', MemberDetail.as_view(), name='member'),
+    path('core/token/', TokenObtainPairView.as_view()),
+    path('core/token/refresh/', TokenRefreshView.as_view()),
+]
+
+if settings.DEBUG:
+    urlpatterns += static(
+        settings.MEDIA_URL,
+        document_root=settings.MEDIA_ROOT,
+    )
+
+
+docker-compose down
+
+docker-compose run --rm app sh -c "python manage.py createsuperuser"
+username: admin
+password: app123
 
 docker-compose up
+
+
+api endpoints:
+GET: http://127.0.0.1:8000/core/member/
+POST: http://127.0.0.1:8000/core/member/
+PUT: http://127.0.0.1:8000/core/member/1/
+DELETE: http://127.0.0.1:8000/core/member/1/
+
+tokens endpoints:
+http://127.0.0.1:8000/core/token/
+http://127.0.0.1:8000/core/token/refresh/
+
+
+{
+    "mrn": 228,
+    "name": "John Doe",
+    "dob": "1968-01-28"
+}
+
+
+accessing postgres database in container:
+--docker exec -it [container_name] psql -U [database_name]
+docker exec -it demo_db_1 psql -U devdb
+SELECT * FROM core_memberss;
+
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------
 
