@@ -1,0 +1,300 @@
+--requirements:
+Django>=3.2.3,<3.3
+
+
+--Dockerfile:
+FROM python:3.9-alpine3.13
+LABEL maintainer="kevinha298"
+
+ENV PYTHONUNBUFFERED 1
+
+COPY ./requirements.txt /requirements.txt
+COPY ./app /app
+
+WORKDIR /app
+EXPOSE 8000
+
+RUN python -m venv /py && \
+    /py/bin/pip install --upgrade pip && \
+    /py/bin/pip install -r /requirements.txt && \
+    adduser --disabled-password --no-create-home app
+
+ENV PATH="/py/bin:$PATH"
+
+USER app
+
+
+--docker-compose:
+version: '3.9'
+
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - 8000:8000
+    volumes:
+      - ./app:/app
+
+
+docker-compose build
+
+docker-compose run --rm app sh -c "django-admin startproject app ."
+
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+--docker-compose:
+version: '3.9'
+
+services:
+  app:
+    build:
+      context: .
+    ports:
+      - 8000:8000
+    volumes:
+      - ./app:/app
+    environment:
+      - SECRET_KEY=devsecretkey
+      - DEBUG=1
+      - DB_HOST=db
+      - DB_NAME=devdb
+      - DB_USER=devuser
+      - DB_PASS=changeme
+    depends_on:
+      - db
+
+  db:
+    image: postgres:13-alpine
+    environment:
+      - POSTGRES_DB=devdb
+      - POSTGRES_USER=devuser
+      - POSTGRES_PASSWORD=changeme
+
+
+--Dockerfile:
+FROM python:3.9-alpine3.13
+LABEL maintainer="kevinha298"
+
+ENV PYTHONUNBUFFERED 1
+
+COPY ./requirements.txt /requirements.txt
+COPY ./app /app
+
+WORKDIR /app
+EXPOSE 8000
+
+RUN python -m venv /py && \
+    /py/bin/pip install --upgrade pip && \
+    apk add --update --no-cache postgresql-client && \
+    apk add --update --no-cache --virtual .tmp-deps \
+        build-base postgresql-dev musl-dev && \
+    /py/bin/pip install -r /requirements.txt && \
+    apk del .tmp-deps && \
+    adduser --disabled-password --no-create-home app
+
+ENV PATH="/py/bin:$PATH"
+
+USER app
+
+
+--requirements:
+Django>=3.2.3,<3.3
+psycopg2>=2.8.6,<2.9
+djangorestframework==3.12.2
+django-cors-headers==3.5.0
+dj-database-url==0.5.0
+python-dotenv==0.15.0
+djangorestframework_simplejwt>=5.0
+
+
+--//Demo/app/app/settings.py:
+import os
+
+SECRET_KEY = os.environ.get('SECRET_KEY')
+
+DEBUG = bool(int(os.environ.get('DEBUG', 0)))
+
+ALLOWED_HOSTS = []
+ALLOWED_HOSTS.extend(
+    filter(
+        None,
+        os.environ.get('ALLOWED_HOSTS', '').split(','),
+    )
+)
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'HOST': os.environ.get('DB_HOST'),
+        'NAME': os.environ.get('DB_NAME'),
+        'USER': os.environ.get('DB_USER'),
+        'PASSWORD': os.environ.get('DB_PASS'),
+    }
+}
+
+
+docker-compose build
+
+docker-compose run --rm app sh -c "python manage.py startapp core"
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+--//Demo/app/app/settings.py:
+--In the "INSTALLED_APPS" section of the ./app/app/settings.py file, add the following lines:
+'rest_framework',
+'core',
+
+--//Demo/app/core/models.py:
+from django.db import models
+
+# Create your models here.
+class Member(models.Model):
+    mrn = models.IntegerField(unique=True)
+    name = models.CharField(max_length=100)
+    dob = models.DateField()
+
+    def __str__(self):
+        return f'{self.mrn} - {self.name}'
+
+
+--//Demo/app/core/admin.py:
+
+from django.contrib import admin
+from core.models import *
+
+# Register your models here.
+admin.site.register(Member)
+
+
+--//Demo/app/core/serializers.py:
+from rest_framework import serializers
+from core.models import Member
+
+class MemberSerializer(serializers.ModelSerializer):
+    mrn = serializers.IntegerField(required=False)
+    name = serializers.CharField(required=False)
+    dob = serializers.DateField(required=False)
+    class Meta:
+        model = Member
+        fields = '__all__'
+
+
+--//Demo/app/core/core.py:
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from .serializers import * 
+
+class MemberList(APIView):
+    def get(self, request):
+        model = Member.objects.all()
+        serializer = MemberSerializer(model, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = MemberSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class MemberDetail(APIView):
+    def get_user(self, mrn):
+        try:
+            model = Member.objects.get(id=mrn)
+            return model
+        except Member.DoesNotExist:
+            return
+
+    def get(self, request, mrn):
+        if not self.get_user(mrn):
+            return Response(f'User with ID: {mrn} is not found in database.', status=status.HTTP_404_NOT_FOUND)
+        serializer = MemberSerializer(self.get_user(mrn))
+        return Response(serializer.data)
+
+    def put(self, request, mrn):
+        if not self.get_user(mrn):
+            return Response(f'User with ID: {mrn} is not found in database.', status=status.HTTP_404_NOT_FOUND)
+        serializer = MemberSerializer(self.get_user(mrn), data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, mrn):
+        if not self.get_user(mrn):
+            return Response(f'User with ID: {mrn} is not found in database.', status=status.HTTP_404_NOT_FOUND)
+        model = self.get_user(mrn)
+        model.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+
+--//Demo/app/app/urls.py:
+from django.contrib import admin
+from django.urls import path
+from django.conf.urls import url 
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+from core.core import MemberList, MemberDetail
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    url(r'^core/member/$', MemberList.as_view(), name='member'),
+    url(r'^core/member/(?P<mrn>\d+)/$', MemberDetail.as_view(), name='member'),
+    path('core/token/', TokenObtainPairView.as_view()),
+    path('core/token/refresh/', TokenRefreshView.as_view())
+]
+
+
+--Add the following at the bottom of //Demo/app/app/settings.py:
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES' : ('rest_framework.permissions.IsAuthenticated',),
+    'DEFAULT_AUTHENTICATION_CLASSES' : ('rest_framework_simplejwt.authentication.JWTAuthentication',)
+}
+
+
+docker-compose run --rm app sh -c "python manage.py makemigrations"
+
+--Add "management" folder and its content inside folder //Demo/app/core/:
+
+
+--docker-compose:
+version: '3.9'
+
+services:
+  app:
+    build:
+      context: .
+    command: >
+      sh -c "python manage.py wait_for_db &&
+             python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"  
+    ports:
+      - 8000:8000
+    volumes:
+      - ./app:/app
+    environment:
+      - SECRET_KEY=devsecretkey
+      - DEBUG=1
+      - DB_HOST=db
+      - DB_NAME=postgres
+      - DB_USER=postgres
+      - DB_PASS=postgres
+    depends_on:
+      - db
+
+  db:
+    image: postgres:13-alpine
+    environment:
+      - POSTGRES_DB=devdb
+      - POSTGRES_USER=devuser
+      - POSTGRES_PASSWORD=changeme
+
+
+
+docker-compose up
+
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+
