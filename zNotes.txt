@@ -424,11 +424,188 @@ http://127.0.0.1:8000/core/token/refresh/
 }
 
 
-accessing postgres database in container:
---docker exec -it [container_name] psql -U [database_name]
-docker exec -it demo_db_1 psql -U devdb
-SELECT * FROM core_memberss;
+--accessing postgres database in container:
+--docker exec -it [container_name] psql -d [database_name] -U [user_name]
+
+--Login: 
+docker exec -it demo_db_1 psql -d devdb -U devuser
+
+--List databases:
+\l
+
+--List tables with current database:
+\dt
+
+--Select data from a table in current database:
+SELECT * FROM core_member;
 
 
 -------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+--Add proxy folder and its content under root directory (demo)
+
+--Add scripts folder and its content under root directory (demo)
+
+--requirements:
+Django>=3.2.3,<3.3
+psycopg2>=2.8.6,<2.9
+djangorestframework==3.12.2
+django-cors-headers==3.5.0
+dj-database-url==0.5.0
+python-dotenv==0.15.0
+djangorestframework_simplejwt>=5.0
+uWSGI>=2.0.19.1,<2.1
+
+
+--Dockerfile:
+
+FROM python:3.9-alpine3.13
+LABEL maintainer="kevinha298"
+
+ENV PYTHONUNBUFFERED 1
+
+COPY ./requirements.txt /requirements.txt
+COPY ./app /app
+COPY ./scripts /scripts
+
+WORKDIR /app
+EXPOSE 8000
+
+RUN python -m venv /py && \
+    /py/bin/pip install --upgrade pip && \
+    apk add --update --no-cache postgresql-client && \
+    apk add --update --no-cache --virtual .tmp-deps \
+        build-base postgresql-dev musl-dev linux-headers && \
+    /py/bin/pip install -r /requirements.txt && \
+    apk del .tmp-deps && \
+    adduser --disabled-password --no-create-home app && \
+    mkdir -p /vol/web/static && \
+    mkdir -p /vol/web/media && \
+    chown -R app:app /vol && \
+    chmod -R 755 /vol && \
+    chmod -R +x /scripts
+
+
+ENV PATH="/scripts:/py/bin:$PATH"
+
+USER app
+
+CMD ["run.sh"]
+
+
+--Add docker-compose-deploy.yml file under root directory (demo):
+version: "3.9"
+
+services:
+  app:
+    build:
+      context: .
+    restart: always
+    volumes:
+      - static-data:/vol/web
+    environment:
+      - DB_HOST=db
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASS=${DB_PASS}
+      - SECRET_KEY=${SECRET_KEY}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
+    depends_on:
+      - db
+
+  db:
+    image: postgres:13-alpine
+    restart: always
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_DB=${DB_NAME}
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASS}
+
+  proxy:
+    build:
+      context: ./proxy
+    restart: always
+    depends_on:
+      - app
+    ports:
+      - 80:8000
+    volumes:
+      - static-data:/vol/static
+
+volumes:
+  postgres-data:
+  static-data:
+
+
+--Add .env.sample file under root directory (demo):
+DB_NAME=dbname
+DB_USER=rootuser
+DB_PASS=changeme
+SECRET_KEY=changeme
+ALLOWED_HOSTS=127.0.0.1
+
+
+--Add .env file under root directory (demo):
+DB_NAME=dbname
+DB_USER=rootuser
+DB_PASS=changeme
+SECRET_KEY=changeme
+ALLOWED_HOSTS=127.0.0.1
+
+
+docker-compose -f docker-compose-deploy.yml down --volumes
+docker-compose -f docker-compose-deploy.yml build
+docker-compose -f docker-compose-deploy.yml up
+
+--Test:
+http://127.0.0.1/
+
+
+docker-compose -f docker-compose-deploy.yml run --rm app sh -c "python manage.py createsuperuser"
+
+--Username (leave blank to use 'app'): admin
+--Email address: admin@gmail.com
+--Password: app123
+--Password (again): app123
+
+
+--Log in as admin to test:
+http://127.0.0.1/admin
+
+
+--Test api endpoints
+api endpoints:
+GET: http://127.0.0.1/core/member/
+POST: http://127.0.0.1/core/member/
+PUT: http://127.0.0.1/core/member/1/
+DELETE: http://127.0.0.1/core/member/1/
+
+tokens endpoints:
+http://127.0.0.1/core/token/
+http://127.0.0.1/core/token/refresh/
+
+
+{
+    "mrn": 228,
+    "name": "John Doe",
+    "dob": "1968-01-28"
+}
+
+
+
+
+--Postgresql Login: 
+docker exec -it demo_db_1 psql -d dbname -U rootuser
+
+--List databases:
+\l
+
+--List tables with current database:
+\dt
+
+--Select data from a table in current database:
+SELECT * FROM core_member;
 
