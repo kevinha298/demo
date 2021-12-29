@@ -1,601 +1,4 @@
---requirements:
-Django>=3.2.3,<3.3
-
-
---Dockerfile:
-FROM python:3.9-alpine3.13
-LABEL maintainer="kevinha298"
-
-ENV PYTHONUNBUFFERED 1
-
-COPY ./requirements.txt /requirements.txt
-COPY ./app /app
-
-WORKDIR /app
-EXPOSE 8000
-
-RUN python -m venv /py && \
-    /py/bin/pip install --upgrade pip && \
-    /py/bin/pip install -r /requirements.txt && \
-    adduser --disabled-password --no-create-home app
-
-ENV PATH="/py/bin:$PATH"
-
-USER app
-
-
---docker-compose:
-version: '3.9'
-
-services:
-  app:
-    build:
-      context: .
-    ports:
-      - 8000:8000
-    volumes:
-      - ./app:/app
-
-
-docker-compose build
-
-docker-compose run --rm app sh -c "django-admin startproject app ."
-
-
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-
---docker-compose:
-version: '3.9'
-
-services:
-  app:
-    build:
-      context: .
-    ports:
-      - 8000:8000
-    volumes:
-      - ./app:/app
-    environment:
-      - SECRET_KEY=devsecretkey
-      - DEBUG=1
-      - DB_HOST=db
-      - DB_NAME=devdb
-      - DB_USER=devuser
-      - DB_PASS=changeme
-    depends_on:
-      - db
-
-  db:
-    image: postgres:13-alpine
-    environment:
-      - POSTGRES_DB=devdb
-      - POSTGRES_USER=devuser
-      - POSTGRES_PASSWORD=changeme
-
-
---Dockerfile:
-FROM python:3.9-alpine3.13
-LABEL maintainer="kevinha298"
-
-ENV PYTHONUNBUFFERED 1
-
-COPY ./requirements.txt /requirements.txt
-COPY ./app /app
-
-WORKDIR /app
-EXPOSE 8000
-
-RUN python -m venv /py && \
-    /py/bin/pip install --upgrade pip && \
-    apk add --update --no-cache postgresql-client && \
-    apk add --update --no-cache --virtual .tmp-deps \
-        build-base postgresql-dev musl-dev && \
-    /py/bin/pip install -r /requirements.txt && \
-    apk del .tmp-deps && \
-    adduser --disabled-password --no-create-home app
-
-ENV PATH="/py/bin:$PATH"
-
-USER app
-
-
---requirements:
-Django>=3.2.3,<3.3
-psycopg2>=2.8.6,<2.9
-djangorestframework==3.12.2
-django-cors-headers==3.5.0
-dj-database-url==0.5.0
-python-dotenv==0.15.0
-djangorestframework_simplejwt>=5.0
-
-
---//Demo/app/app/settings.py:
-import os
-
-SECRET_KEY = os.environ.get('SECRET_KEY')
-
-DEBUG = bool(int(os.environ.get('DEBUG', 0)))
-
-ALLOWED_HOSTS = []
-ALLOWED_HOSTS.extend(
-    filter(
-        None,
-        os.environ.get('ALLOWED_HOSTS', '').split(','),
-    )
-)
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'HOST': os.environ.get('DB_HOST'),
-        'NAME': os.environ.get('DB_NAME'),
-        'USER': os.environ.get('DB_USER'),
-        'PASSWORD': os.environ.get('DB_PASS'),
-    }
-}
-
-
-docker-compose build
-
-docker-compose run --rm app sh -c "python manage.py startapp core"
-
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-
---//Demo/app/app/settings.py:
---In the "INSTALLED_APPS" section of the ./app/app/settings.py file, add the following lines:
-'rest_framework',
-'core',
-
---//Demo/app/core/models.py:
-from django.db import models
-
-# Create your models here.
-class Member(models.Model):
-    mrn = models.IntegerField(unique=True)
-    name = models.CharField(max_length=100)
-    dob = models.DateField()
-
-    def __str__(self):
-        return f'{self.mrn} - {self.name}'
-
-
---//Demo/app/core/admin.py:
-
-from django.contrib import admin
-from core.models import *
-
-# Register your models here.
-admin.site.register(Member)
-
-
---//Demo/app/core/serializers.py:
-from rest_framework import serializers
-from core.models import Member
-
-class MemberSerializer(serializers.ModelSerializer):
-    mrn = serializers.IntegerField(required=False)
-    name = serializers.CharField(required=False)
-    dob = serializers.DateField(required=False)
-    class Meta:
-        model = Member
-        fields = '__all__'
-
-
---//Demo/app/core/core.py:
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from .serializers import * 
-
-class MemberList(APIView):
-    def get(self, request):
-        model = Member.objects.all()
-        serializer = MemberSerializer(model, many=True)
-        return Response(serializer.data)
-
-    def post(self, request):
-        serializer = MemberSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-class MemberDetail(APIView):
-    def get_user(self, mrn):
-        try:
-            model = Member.objects.get(id=mrn)
-            return model
-        except Member.DoesNotExist:
-            return
-
-    def get(self, request, mrn):
-        if not self.get_user(mrn):
-            return Response(f'User with ID: {mrn} is not found in database.', status=status.HTTP_404_NOT_FOUND)
-        serializer = MemberSerializer(self.get_user(mrn))
-        return Response(serializer.data)
-
-    def put(self, request, mrn):
-        if not self.get_user(mrn):
-            return Response(f'User with ID: {mrn} is not found in database.', status=status.HTTP_404_NOT_FOUND)
-        serializer = MemberSerializer(self.get_user(mrn), data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-    def delete(self, request, mrn):
-        if not self.get_user(mrn):
-            return Response(f'User with ID: {mrn} is not found in database.', status=status.HTTP_404_NOT_FOUND)
-        model = self.get_user(mrn)
-        model.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
-
-
-
---//Demo/app/app/urls.py:
-from django.contrib import admin
-from django.urls import path
-from django.conf.urls import url 
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from core.core import MemberList, MemberDetail
-
-urlpatterns = [
-    path('admin/', admin.site.urls),
-    url(r'^core/member/$', MemberList.as_view(), name='member'),
-    url(r'^core/member/(?P<mrn>\d+)/$', MemberDetail.as_view(), name='member'),
-    path('core/token/', TokenObtainPairView.as_view()),
-    path('core/token/refresh/', TokenRefreshView.as_view())
-]
-
-
---Add the following at the bottom of //Demo/app/app/settings.py:
-REST_FRAMEWORK = {
-    'DEFAULT_PERMISSION_CLASSES' : ('rest_framework.permissions.IsAuthenticated',),
-    'DEFAULT_AUTHENTICATION_CLASSES' : ('rest_framework_simplejwt.authentication.JWTAuthentication',)
-}
-
-
-docker-compose run --rm app sh -c "python manage.py makemigrations"
-
---Add "management" folder and its content inside folder //Demo/app/core/:
-
-
---docker-compose:
-version: '3.9'
-
-services:
-  app:
-    build:
-      context: .
-    command: >
-      sh -c "python manage.py wait_for_db &&
-             python manage.py migrate &&
-             python manage.py runserver 0.0.0.0:8000"  
-    ports:
-      - 8000:8000
-    volumes:
-      - ./app:/app
-    environment:
-      - SECRET_KEY=devsecretkey
-      - DEBUG=1
-      - DB_HOST=db
-      - DB_NAME=postgres
-      - DB_USER=postgres
-      - DB_PASS=postgres
-    depends_on:
-      - db
-
-  db:
-    image: postgres:13-alpine
-    environment:
-      - POSTGRES_DB=devdb
-      - POSTGRES_USER=devuser
-      - POSTGRES_PASSWORD=changeme
-
-
-docker-compose up
-
-
---Dockerfile:
-FROM python:3.9-alpine3.13
-LABEL maintainer="kevinha298"
-
-ENV PYTHONUNBUFFERED 1
-
-COPY ./requirements.txt /requirements.txt
-COPY ./app /app
-
-WORKDIR /app
-EXPOSE 8000
-
-RUN python -m venv /py && \
-    /py/bin/pip install --upgrade pip && \
-    apk add --update --no-cache postgresql-client && \
-    apk add --update --no-cache --virtual .tmp-deps \
-        build-base postgresql-dev musl-dev && \
-    /py/bin/pip install -r /requirements.txt && \
-    apk del .tmp-deps && \
-    adduser --disabled-password --no-create-home app && \
-    mkdir -p /vol/web/static && \
-    mkdir -p /vol/web/media && \
-    chown -R app:app /vol && \
-    chmod -R 755 /vol
-
-ENV PATH="/py/bin:$PATH"
-
-USER app
-
-
---docker-compose:
-version: '3.9'
-
-services:
-  app:
-    build:
-      context: .
-    command: >
-      sh -c "python manage.py wait_for_db &&
-             python manage.py migrate &&
-             python manage.py runserver 0.0.0.0:8000"
-    ports:
-      - 8000:8000
-    volumes:
-      - ./app:/app
-      - ./data/web:/vol/web
-    environment:
-      - SECRET_KEY=devsecretkey
-      - DEBUG=1
-      - DB_HOST=db
-      - DB_NAME=devdb
-      - DB_USER=devuser
-      - DB_PASS=changeme
-    depends_on:
-      - db
-
-  db:
-    image: postgres:13-alpine
-    environment:
-      - POSTGRES_DB=devdb
-      - POSTGRES_USER=devuser
-      - POSTGRES_PASSWORD=changeme
-
-
-
---//Demo/app/app/settings.py:
---Replace the line of "STATIC_URL = '/static/'" with the following lines:
-
-# STATIC_URL = '/static/'
-STATIC_URL = '/static/static/'
-MEDIA_URL = '/static/media/'
-
-MEDIA_ROOT = '/vol/web/media'
-STATIC_ROOT = '/vol/web/static'
-
-
---//Demo/app/app/urls.py:
-from django.contrib import admin
-from django.urls import path
-from django.conf.urls.static import static
-from django.conf import settings
-from django.conf.urls import url 
-from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from core.core import MemberList, MemberDetail
-
-
-urlpatterns = [
-    path('admin/', admin.site.urls),
-    url(r'^core/member/$', MemberList.as_view(), name='member'),
-    url(r'^core/member/(?P<mrn>\d+)/$', MemberDetail.as_view(), name='member'),
-    path('core/token/', TokenObtainPairView.as_view()),
-    path('core/token/refresh/', TokenRefreshView.as_view()),
-]
-
-if settings.DEBUG:
-    urlpatterns += static(
-        settings.MEDIA_URL,
-        document_root=settings.MEDIA_ROOT,
-    )
-
-
-docker-compose down
-
-docker-compose run --rm app sh -c "python manage.py createsuperuser"
-username: admin
-password: app123
-
-docker-compose up
-
-
-api endpoints:
-GET: http://127.0.0.1:8000/core/member/
-POST: http://127.0.0.1:8000/core/member/
-PUT: http://127.0.0.1:8000/core/member/1/
-DELETE: http://127.0.0.1:8000/core/member/1/
-
-tokens endpoints:
-http://127.0.0.1:8000/core/token/
-http://127.0.0.1:8000/core/token/refresh/
-
-
-{
-    "mrn": 228,
-    "name": "John Doe",
-    "dob": "1968-01-28"
-}
-
-
---accessing postgres database in container:
---docker exec -it [container_name] psql -d [database_name] -U [user_name]
-
---Login: 
-docker exec -it demo_db_1 psql -d devdb -U devuser
-
---List databases:
-\l
-
---List tables with current database:
-\dt
-
---Select data from a table in current database:
-SELECT * FROM core_member;
-
-
--------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-
---Add proxy folder and its content under root directory (demo)
-
---Add scripts folder and its content under root directory (demo)
-
---requirements:
-Django>=3.2.3,<3.3
-psycopg2>=2.8.6,<2.9
-djangorestframework==3.12.2
-django-cors-headers==3.5.0
-dj-database-url==0.5.0
-python-dotenv==0.15.0
-djangorestframework_simplejwt>=5.0
-uWSGI>=2.0.19.1,<2.1
-
-
---Dockerfile:
-
-FROM python:3.9-alpine3.13
-LABEL maintainer="kevinha298"
-
-ENV PYTHONUNBUFFERED 1
-
-COPY ./requirements.txt /requirements.txt
-COPY ./app /app
-COPY ./scripts /scripts
-
-WORKDIR /app
-EXPOSE 8000
-
-RUN python -m venv /py && \
-    /py/bin/pip install --upgrade pip && \
-    apk add --update --no-cache postgresql-client && \
-    apk add --update --no-cache --virtual .tmp-deps \
-        build-base postgresql-dev musl-dev linux-headers && \
-    /py/bin/pip install -r /requirements.txt && \
-    apk del .tmp-deps && \
-    adduser --disabled-password --no-create-home app && \
-    mkdir -p /vol/web/static && \
-    mkdir -p /vol/web/media && \
-    chown -R app:app /vol && \
-    chmod -R 755 /vol && \
-    chmod -R +x /scripts
-
-
-ENV PATH="/scripts:/py/bin:$PATH"
-
-USER app
-
-CMD ["run.sh"]
-
-
---Add docker-compose-deploy.yml file under root directory (demo):
-version: "3.9"
-
-services:
-  app:
-    build:
-      context: .
-    restart: always
-    volumes:
-      - static-data:/vol/web
-    environment:
-      - DB_HOST=db
-      - DB_NAME=${DB_NAME}
-      - DB_USER=${DB_USER}
-      - DB_PASS=${DB_PASS}
-      - SECRET_KEY=${SECRET_KEY}
-      - ALLOWED_HOSTS=${ALLOWED_HOSTS}
-    depends_on:
-      - db
-
-  db:
-    image: postgres:13-alpine
-    restart: always
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    environment:
-      - POSTGRES_DB=${DB_NAME}
-      - POSTGRES_USER=${DB_USER}
-      - POSTGRES_PASSWORD=${DB_PASS}
-
-  proxy:
-    build:
-      context: ./proxy
-    restart: always
-    depends_on:
-      - app
-    ports:
-      - 80:8000
-    volumes:
-      - static-data:/vol/static
-
-volumes:
-  postgres-data:
-  static-data:
-
-
---Add .env.sample file under root directory (demo):
-DB_NAME=dbname
-DB_USER=rootuser
-DB_PASS=changeme
-SECRET_KEY=changeme
-ALLOWED_HOSTS=127.0.0.1
-
-
---Add .env file under root directory (demo):
-DB_NAME=dbname
-DB_USER=rootuser
-DB_PASS=changeme
-SECRET_KEY=changeme
-ALLOWED_HOSTS=127.0.0.1
-
-
-docker-compose -f docker-compose-deploy.yml down --volumes
-docker-compose -f docker-compose-deploy.yml build
-docker-compose -f docker-compose-deploy.yml up
-
---Test:
-http://127.0.0.1/
-
-
-docker-compose -f docker-compose-deploy.yml run --rm app sh -c "python manage.py createsuperuser"
-
---Username (leave blank to use 'app'): admin
---Email address: admin@gmail.com
---Password: app123
---Password (again): app123
-
-
---Log in as admin to test:
-http://127.0.0.1/admin
-
-
---Test api endpoints
-api endpoints:
-GET: http://127.0.0.1/core/member/
-POST: http://127.0.0.1/core/member/
-PUT: http://127.0.0.1/core/member/1/
-DELETE: http://127.0.0.1/core/member/1/
-
-tokens endpoints:
-http://127.0.0.1/core/token/
-http://127.0.0.1/core/token/refresh/
-
-
-{
-    "mrn": 228,
-    "name": "John Doe",
-    "dob": "1968-01-28"
-}
-
-
-
+https://londonappdeveloper.com/deploying-django-with-docker-compose/
 
 --Postgresql Login: 
 docker exec -it demo_db_1 psql -d dbname -U rootuser
@@ -609,3 +12,85 @@ docker exec -it demo_db_1 psql -d dbname -U rootuser
 --Select data from a table in current database:
 SELECT * FROM core_member;
 
+
+-- Log into AWS console and import SSH key pair
+
+-- Launch Linux EC2 
+
+-- SSH into Linus EC2 instance: 
+ssh ec2-user@ec2-3-83-190-70.compute-1.amazonaws.com
+
+-- Install and configure EC2 instance:
+sudo yum install git -y
+sudo amazon-linux-extras install docker -y
+sudo systemctl enable docker.service
+sudo systemctl start docker.service
+sudo usermod -aG docker ec2-user
+sudo curl -L "https://github.com/docker/compose/releases/download/1.29.1/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+exit 
+
+ssh ec2-user@ec2-3-83-190-70.compute-1.amazonaws.com
+
+--Push updated code change to github
+
+--Clone code from github to EC2 instance:
+git clone https://github.com/kevinha298/demo.git
+
+cd demo/
+
+cp .env.sample .env
+
+vi .env
+
+DB_NAME=app
+DB_USER=approotuser
+DB_PASS=apppassword
+SECRET_KEY=lkjasdlfsldjflsdjflsjdflksdlflsdfslhfkhe4578947lsdj
+ALLOWED_HOSTS=ec2-3-83-190-70.compute-1.amazonaws.com
+
+
+docker-compose -f docker-compose-deploy.yml up -d
+
+--Test application on browser:
+ec2-3-83-190-70.compute-1.amazonaws.com
+ec2-3-83-190-70.compute-1.amazonaws.com/admin
+
+--Create superuser:
+docker-compose -f docker-compose-deploy.yml run --rm app sh -c "python manage.py createsuperuser"
+
+
+docker container ls -a
+
+--Postgresql Login: 
+docker exec -it demo_db_1 psql -d app -U approotuser
+
+
+--List databases:
+\l
+
+--List tables with current database:
+\dt
+
+--Select data from a table in current database:
+SELECT * FROM core_member;
+
+--Test api endpoints
+api endpoints:
+GET: ec2-3-83-190-70.compute-1.amazonaws.com/core/member/
+POST: ec2-3-83-190-70.compute-1.amazonaws.com/core/member/
+PUT: ec2-3-83-190-70.compute-1.amazonaws.com/core/member/1/
+DELETE: ec2-3-83-190-70.compute-1.amazonaws.com/core/member/1/
+
+tokens endpoints:
+ec2-3-83-190-70.compute-1.amazonaws.com/core/token/
+ec2-3-83-190-70.compute-1.amazonaws.com/core/token/refresh/
+
+
+ec2-3-83-190-70.compute-1.amazonaws.com/core/member/1/
+
+{
+    "mrn": 228,
+    "name": "John Doe",
+    "dob": "1968-01-28"
+}
